@@ -1,4 +1,4 @@
-import * as crypto from 'crypto';
+import * as crypto from 'crypto'
 
 // Transfer of funds between two wallets
 class Transaction {
@@ -8,27 +8,27 @@ class Transaction {
         public payee: string // public key
     ) { }
 
-    toString() {
-        return JSON.stringify(this);
+    toString(): string {
+        return JSON.stringify(this)
     }
 }
 
 // Individual block on the chain
 class Block {
 
-    public nonce = Math.round(Math.random() * 999999999);
+    public nonce: number = Math.round(Math.random() * 999999999)
 
     constructor(
         public prevHash: string,
         public transaction: Transaction,
-        public ts = Date.now()
+        public ts: number = Date.now()
     ) { }
 
-    get hash() {
-        const str = JSON.stringify(this);
-        const hash = crypto.createHash('SHA256');
-        hash.update(str).end();
-        return hash.digest('hex');
+    get hash(): string {
+        const block: string = JSON.stringify(this)
+        const hash: crypto.Hash = crypto.createHash('SHA256')
+        hash.update(block).end()
+        return hash.digest('hex')
     }
 }
 
@@ -36,95 +36,119 @@ class Block {
 // The blockchain
 class Chain {
     // Singleton instance
-    public static instance = new Chain();
+    public static instance: Chain = new Chain()
 
-    chain: Block[];
+    chain: Block[]
 
     constructor() {
         this.chain = [
             // Genesis block
             new Block('', new Transaction(100, 'genesis', 'satoshi'))
-        ];
+        ]
     }
 
     // Most recent block
-    get lastBlock() {
-        return this.chain[this.chain.length - 1];
+    get lastBlock(): Block {
+        return this.chain[this.chain.length - 1]
     }
 
     // Proof of work system
-    mine(nonce: number) {
-        let solution = 1;
+    mine(nonce: number): number {
+        let solution: number = 1
         console.log('⛏️  mining...')
 
         while (true) {
 
-            const hash = crypto.createHash('MD5');
-            hash.update((nonce + solution).toString()).end();
+            const hash: crypto.Hash = crypto.createHash('MD5')
+            hash.update((nonce + solution).toString()).end()
 
-            const attempt = hash.digest('hex');
+            const attempt: string = hash.digest('hex')
 
             if (attempt.substr(0, 4) === '0000') {
-                console.log(`Solved: ${solution}`);
-                return solution;
+                console.log(`Solved: ${solution}`)
+                return solution
             }
 
-            solution += 1;
+            solution += 1
         }
     }
 
     // Add a new block to the chain if valid signature & proof of work is complete
     addBlock(transaction: Transaction, signature: Buffer) {
-        const verify = crypto.createVerify('SHA256');
-        verify.update(transaction.toString());
+        const verify: crypto.Verify = crypto.createVerify('SHA256')
+        verify.update(transaction.toString())
 
-        const isValid = verify.verify(transaction.payer, signature);
+        console.log(transaction.amount);
+
+
+        const isValid: boolean = verify.verify(transaction.payer, signature)
 
         if (isValid) {
-            const newBlock = new Block(this.lastBlock.hash, transaction);
-            this.mine(newBlock.nonce);
-            this.chain.push(newBlock);
+            const newBlock: Block = new Block(this.lastBlock.hash, transaction)
+            this.mine(newBlock.nonce)
+            this.chain.push(newBlock)
         }
+    }
+
+    get isChainValid(): { chainValid: boolean } {
+        for (let index: number = 1; index < this.chain.length; index++) {
+            const currentBlock = this.chain[index]
+            const previousBlock = this.chain[index - 1]
+
+            // Is the current block valid?
+            if (currentBlock.hash !== currentBlock.hash) {
+                return { chainValid: false }
+            }
+
+            // Is the previous block valid?
+            if (currentBlock.prevHash !== previousBlock.hash) {
+                return { chainValid: false }
+            }
+        }
+        return { chainValid: true }
     }
 
 }
 
 // Wallet gives a user a public/private keypair
 class Wallet {
-    public publicKey: string;
-    public privateKey: string;
+    public publicKey: string
+    public privateKey: string
 
     constructor() {
         const keypair = crypto.generateKeyPairSync('rsa', {
             modulusLength: 2048,
             publicKeyEncoding: { type: 'spki', format: 'pem' },
             privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-        });
+        })
 
-        this.privateKey = keypair.privateKey;
-        this.publicKey = keypair.publicKey;
+        this.privateKey = keypair.privateKey
+        this.publicKey = keypair.publicKey
     }
 
     sendMoney(amount: number, payeePublicKey: string) {
-        const transaction = new Transaction(amount, this.publicKey, payeePublicKey);
+        const transaction: Transaction = new Transaction(amount, this.publicKey, payeePublicKey)
 
-        const sign = crypto.createSign('SHA256');
-        sign.update(transaction.toString()).end();
+        const sign: crypto.Signer = crypto.createSign('SHA256')
+        sign.update(transaction.toString()).end()
 
-        const signature = sign.sign(this.privateKey);
-        Chain.instance.addBlock(transaction, signature);
+        const signature: Buffer = sign.sign(this.privateKey)
+        Chain.instance.addBlock(transaction, signature)
     }
 }
 
 // Example usage
 
-const satoshi = new Wallet();
-const bob = new Wallet();
-const alice = new Wallet();
+const satoshi = new Wallet()
+const bob = new Wallet()
+const alice = new Wallet()
 
-satoshi.sendMoney(50, bob.publicKey);
-bob.sendMoney(23, alice.publicKey);
-alice.sendMoney(5, bob.publicKey);
+satoshi.sendMoney(50, bob.publicKey)
+Chain.instance.chain[1].transaction.amount = 5100 // Why is this possible?
+bob.sendMoney(23, alice.publicKey)
+alice.sendMoney(5, bob.publicKey)
 
 console.log(Chain.instance.chain)
+
+console.log(Chain.instance.isChainValid);
 

@@ -1,17 +1,29 @@
 import * as crypto from 'crypto'
-import { throws } from 'node:assert'
-import { Transform } from 'node:stream'
 
 // Transfer of funds between two wallets
 class Transaction {
+    public signature: string
     constructor(
         public amount: number,
         public payer: string, // public key
-        public payee: string // public key
-    ) { }
+        public payee: string  // public key
+    ) { this.signature = '' }
 
-    toString(): string {
-        return JSON.stringify(this)
+    get toString(): string {
+        return JSON.stringify({ amount: this.amount, payer: this.payer, payee: this.payee })
+    }
+
+    get hash(): string {
+        return crypto.createHash('SHA256').update(this.toString).digest('hex')
+    }
+
+    set signTransaction(privateKey: string) {
+        this.signature = crypto.createSign('SHA256').update(this.hash).sign(privateKey, 'base64').toString()
+    }
+
+    get verifyTransaction(): boolean {
+        if (this.payer === 'system') return true
+        return crypto.createVerify('SHA256').update(this.hash).verify(Buffer.from(this.payer, 'utf-8'), Buffer.from(this.signature, 'base64'))
     }
 }
 
@@ -20,11 +32,9 @@ class Block {
     public hash: string
     public nonce: number
 
-    // public nonce: number = Math.round(Math.random() * 999999999)
-
     constructor(
         public prevHash: string,
-        public transaction: Transaction[],
+        public transactions: Transaction[],
         public ts: number = Date.now(),
     ) {
         this.hash = this.getHash
@@ -32,7 +42,12 @@ class Block {
     }
 
     get getHash(): string {
-        return crypto.createHash('SHA256').update(JSON.stringify(this)).digest('hex')
+        return crypto.createHash('SHA256').update(JSON.stringify({
+            prevHash: this.prevHash,
+            transactions: this.transactions,
+            ts: this.ts,
+            nonce: this.nonce
+        })).digest('hex')
     }
 
     set mine(difficulty: number) {
@@ -44,8 +59,14 @@ class Block {
         }
 
         console.log('💎\tBLOCK MINED ' + this.hash)
+    }
 
+    hasValidTransactions() {
+        for (const transaction of this.transactions) {
+            if (!transaction.verifyTransaction) return false
+        }
 
+        return true
     }
 }
 
@@ -67,7 +88,7 @@ class Chain {
         ]
         this.difficulty = 4
         this.pendingTransactions = []
-        this.miningReward = 1
+        this.miningReward = 100
     }
 
     // Most recent block
@@ -77,14 +98,18 @@ class Chain {
 
 
     minePendingTransaction(miningRewardAddress: string) {
+        const rewardsTransaction = new Transaction(this.miningReward, 'system', miningRewardAddress)
+        this.pendingTransactions.push(rewardsTransaction)
+
         let block = new Block(this.lastBlock.hash, this.pendingTransactions)
         block.mine = this.difficulty
 
         this.chain.push(block)
-        this.pendingTransactions = [new Transaction(this.miningReward, 'system', miningRewardAddress)]
+        this.pendingTransactions = []
     }
 
-    createTransaction(transaction: Transaction) {
+    addTransaction(transaction: Transaction) {
+        // !transaction.payer || !transaction.payee 
         this.pendingTransactions.push(transaction)
     }
 
@@ -92,7 +117,7 @@ class Chain {
         let balance = 0
 
         for (const block of this.chain) {
-            for (const transaction of block.transaction) {
+            for (const transaction of block.transactions) {
                 balance -= (transaction.payer === address) ? transaction.amount : 0
                 balance += (transaction.payee === address) ? transaction.amount : 0
             }
@@ -106,42 +131,24 @@ class Chain {
         newBlock.prevHash = this.lastBlock.hash
         newBlock.mine = this.difficulty
         this.chain.push(newBlock)
-        // addBlock(transaction: Transaction, signature: Buffer) {
-        // const verify: crypto.Verify = crypto.createVerify('SHA256')
-        // verify.update(transaction.toString())
-
-        // console.log(transaction.amount);
-
-
-        // const isValid: boolean = verify.verify(transaction.payer, signature)
-
-        // if (isValid) {
-        //     const newBlock: Block = new Block(this.lastBlock.hash, transaction)
-        //     const solution = this.mine(newBlock.nonce)
-        //     newBlock.nonce += solution
-        //     newBlock.hash
-        //     console.log(newBlock.hash);
-
-        //     // console.log(newBlock, newBlock.nonce, solution, ':', 
-        //newBlock.nonce + solution, crypto.createHash('MD5').update((newBlock.nonce 
-        //+ solution).toString()).digest('hex'));
-
-        //     this.chain.push(newBlock)
-        // }
     }
 
     get isChainValid(): { chainValid: boolean } {
-        for (let index: number = 1; index < this.chain.length; index++) {
+        for (let index: number = 2; index < this.chain.length; index += 1) {
             const currentBlock = this.chain[index]
             const previousBlock = this.chain[index - 1]
 
+            if (!currentBlock.hasValidTransactions) {
+                return { chainValid: false }
+            }
+
             // Is the current block valid?
-            if (currentBlock.hash !== currentBlock.hash) {
+            if (currentBlock.hash !== currentBlock.getHash) {
                 return { chainValid: false }
             }
 
             // Is the previous block valid?
-            if (currentBlock.prevHash !== previousBlock.hash) {
+            if (currentBlock.prevHash !== previousBlock.getHash) {
                 return { chainValid: false }
             }
         }
@@ -155,7 +162,7 @@ class Wallet {
     public publicKey: string
     public privateKey: string
 
-    constructor() {
+    constructor(public chain: Chain) {
         const keypair = crypto.generateKeyPairSync('rsa', {
             modulusLength: 2048,
             publicKeyEncoding: { type: 'spki', format: 'pem' },
@@ -166,38 +173,47 @@ class Wallet {
         this.publicKey = keypair.publicKey
     }
 
-    sendMoney(amount: number, payeePublicKey: string) {
+    sendCoins(amount: number, payeePublicKey: string) {
         const transaction: Transaction = new Transaction(amount, this.publicKey, payeePublicKey)
 
-        const sign: crypto.Signer = crypto.createSign('SHA256')
-        sign.update(transaction.toString()).end()
+        transaction.signTransaction = this.privateKey
 
-        const signature: Buffer = sign.sign(this.privateKey)
-        Chain.instance.addBlock(transaction, signature)
+        this.chain.addTransaction(transaction)
+
+        // const sign: crypto.Signer = crypto.createSign('SHA256')
+        // sign.update(transaction.toString()).end()
+
+        // const signature: Buffer = sign.sign(this.privateKey)
+        // Chain.instance.addBlock(transaction, signature)
     }
 }
 
 // Example usage
 
 const coin = new Chain()
-coin.createTransaction(new Transaction(50, 'red', 'green'))
-coin.createTransaction(new Transaction(10, 'green', 'red'))
-coin.createTransaction(new Transaction(1, 'green', 'red'))
+
+const red = new Wallet(coin)
+const green = new Wallet(coin)
+const blue = new Wallet(coin)
+const greenTrans: [number, string][] = [[10, red.publicKey], [1, red.publicKey]]
+
+red.sendCoins(50, green.publicKey)
+greenTrans.map(g => green.sendCoins(...g))
+red.sendCoins(11, blue.publicKey)
+
 
 
 console.log(`Starting miners`);
-coin.minePendingTransaction('redo')
-coin.minePendingTransaction('redo')
-coin.minePendingTransaction('redo')
+
+coin.minePendingTransaction(red.publicKey)
 
 
-// console.log(`Balance: redo has ${coin.getBalanceFromAdress('redo')} coin`);
-// console.log(`Balance: redo has ${coin.getBalanceFromAdress('red')} coin`);
-// console.log(`Balance: redo has ${coin.getBalanceFromAdress('green')} coin`);
-// console.log(coin.isChainValid);
+console.log(coin.chain[1].transactions)
+console.log(coin.isChainValid)
 
-
-console.log(coin)
+console.log(`Balance: ${coin.getBalanceFromAdress(red.publicKey)} coin`);
+// console.log(`Balance: ${coin.getBalanceFromAdress(blue.publicKey)} coin`);
+// console.log(`Balance: ${coin.getBalanceFromAdress(green.publicKey)} coin`);
 
 // // console.log(Chain.instance.isChainValid);
 

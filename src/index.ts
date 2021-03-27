@@ -1,4 +1,6 @@
 import * as crypto from 'crypto'
+import { throws } from 'node:assert'
+import { Transform } from 'node:stream'
 
 // Transfer of funds between two wallets
 class Transaction {
@@ -15,20 +17,35 @@ class Transaction {
 
 // Individual block on the chain
 class Block {
+    public hash: string
+    public nonce: number
 
-    public nonce: number = Math.round(Math.random() * 999999999)
+    // public nonce: number = Math.round(Math.random() * 999999999)
 
     constructor(
         public prevHash: string,
-        public transaction: Transaction,
-        public ts: number = Date.now()
-    ) { }
+        public transaction: Transaction[],
+        public ts: number = Date.now(),
+    ) {
+        this.hash = this.getHash
+        this.nonce = 0
+    }
 
-    get hash(): string {
-        const block: string = JSON.stringify(this)
-        const hash: crypto.Hash = crypto.createHash('SHA256')
-        hash.update(block).end()
-        return hash.digest('hex')
+    get getHash(): string {
+        return crypto.createHash('SHA256').update(JSON.stringify(this)).digest('hex')
+    }
+
+    set mine(difficulty: number) {
+        console.log('⛏️\tMINING')
+
+        while (this.hash.substring(0, difficulty) !== Array(difficulty + 1).join('0')) {
+            this.nonce += 1
+            this.hash = this.getHash
+        }
+
+        console.log('💎\tBLOCK MINED ' + this.hash)
+
+
     }
 }
 
@@ -38,13 +55,19 @@ class Chain {
     // Singleton instance
     public static instance: Chain = new Chain()
 
-    chain: Block[]
+    public chain: Block[]
+    private difficulty: number
+    private pendingTransactions: Transaction[]
+    private miningReward: number
 
     constructor() {
         this.chain = [
             // Genesis block
-            new Block('', new Transaction(100, 'genesis', 'satoshi'))
+            new Block('', [new Transaction(0, 'genesis', 'genesis')])
         ]
+        this.difficulty = 4
+        this.pendingTransactions = []
+        this.miningReward = 1
     }
 
     // Most recent block
@@ -52,42 +75,59 @@ class Chain {
         return this.chain[this.chain.length - 1]
     }
 
-    // Proof of work system
-    mine(nonce: number): number {
-        let solution: number = 1
-        console.log('⛏️  mining...')
 
-        while (true) {
+    minePendingTransaction(miningRewardAddress: string) {
+        let block = new Block(this.lastBlock.hash, this.pendingTransactions)
+        block.mine = this.difficulty
 
-            const hash: crypto.Hash = crypto.createHash('MD5')
-            hash.update((nonce + solution).toString()).end()
+        this.chain.push(block)
+        this.pendingTransactions = [new Transaction(this.miningReward, 'system', miningRewardAddress)]
+    }
 
-            const attempt: string = hash.digest('hex')
+    createTransaction(transaction: Transaction) {
+        this.pendingTransactions.push(transaction)
+    }
 
-            if (attempt.substr(0, 4) === '0000') {
-                console.log(`Solved: ${solution}`)
-                return solution
+    getBalanceFromAdress(address: string) {
+        let balance = 0
+
+        for (const block of this.chain) {
+            for (const transaction of block.transaction) {
+                balance -= (transaction.payer === address) ? transaction.amount : 0
+                balance += (transaction.payee === address) ? transaction.amount : 0
             }
-
-            solution += 1
         }
+
+        return balance
     }
 
     // Add a new block to the chain if valid signature & proof of work is complete
-    addBlock(transaction: Transaction, signature: Buffer) {
-        const verify: crypto.Verify = crypto.createVerify('SHA256')
-        verify.update(transaction.toString())
+    addBlock(newBlock: Block) {
+        newBlock.prevHash = this.lastBlock.hash
+        newBlock.mine = this.difficulty
+        this.chain.push(newBlock)
+        // addBlock(transaction: Transaction, signature: Buffer) {
+        // const verify: crypto.Verify = crypto.createVerify('SHA256')
+        // verify.update(transaction.toString())
 
-        console.log(transaction.amount);
+        // console.log(transaction.amount);
 
 
-        const isValid: boolean = verify.verify(transaction.payer, signature)
+        // const isValid: boolean = verify.verify(transaction.payer, signature)
 
-        if (isValid) {
-            const newBlock: Block = new Block(this.lastBlock.hash, transaction)
-            this.mine(newBlock.nonce)
-            this.chain.push(newBlock)
-        }
+        // if (isValid) {
+        //     const newBlock: Block = new Block(this.lastBlock.hash, transaction)
+        //     const solution = this.mine(newBlock.nonce)
+        //     newBlock.nonce += solution
+        //     newBlock.hash
+        //     console.log(newBlock.hash);
+
+        //     // console.log(newBlock, newBlock.nonce, solution, ':', 
+        //newBlock.nonce + solution, crypto.createHash('MD5').update((newBlock.nonce 
+        //+ solution).toString()).digest('hex'));
+
+        //     this.chain.push(newBlock)
+        // }
     }
 
     get isChainValid(): { chainValid: boolean } {
@@ -139,16 +179,25 @@ class Wallet {
 
 // Example usage
 
-const satoshi = new Wallet()
-const bob = new Wallet()
-const alice = new Wallet()
+const coin = new Chain()
+coin.createTransaction(new Transaction(50, 'red', 'green'))
+coin.createTransaction(new Transaction(10, 'green', 'red'))
+coin.createTransaction(new Transaction(1, 'green', 'red'))
 
-satoshi.sendMoney(50, bob.publicKey)
-Chain.instance.chain[1].transaction.amount = 5100 // Why is this possible?
-bob.sendMoney(23, alice.publicKey)
-alice.sendMoney(5, bob.publicKey)
 
-console.log(Chain.instance.chain)
+console.log(`Starting miners`);
+coin.minePendingTransaction('redo')
+coin.minePendingTransaction('redo')
+coin.minePendingTransaction('redo')
 
-console.log(Chain.instance.isChainValid);
+
+// console.log(`Balance: redo has ${coin.getBalanceFromAdress('redo')} coin`);
+// console.log(`Balance: redo has ${coin.getBalanceFromAdress('red')} coin`);
+// console.log(`Balance: redo has ${coin.getBalanceFromAdress('green')} coin`);
+// console.log(coin.isChainValid);
+
+
+console.log(coin)
+
+// // console.log(Chain.instance.isChainValid);
 
